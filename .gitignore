@@ -1,3 +1,8 @@
-data/*
+data/ACM
+data/DBLP
+data/IMDB
+data/GDP/check.py
+data/GDP/gdp
+data/GDP/result
 .vscode/*
 __pycache__
