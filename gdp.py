@@ -38,7 +38,7 @@ def micro_f1(logits, labels):
     #recall = true_pos / (true_pos + false_neg)
     #fmeasure = (2 * precision * recall) / (precision + recall)
 
-    predicted = predicted.type(torch.IntTensor)
+    predicted = logits.type(torch.IntTensor)
     labels = labels.type(torch.IntTensor)
 
     true_pos = torch.count_nonzero(predicted * labels)
