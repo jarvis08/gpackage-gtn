@@ -48,7 +48,7 @@ def micro_f1(logits, labels):
     precision = true_pos / (true_pos + false_pos)
     recall = true_pos / (true_pos + false_neg)
     fmeasure = (2 * precision * recall) / (precision + recall)
-    return fmeasure.type(torch.LongTensor)
+    return fmeasure.type(torch.FloatTensor)
 
 
 if __name__ == '__main__':
