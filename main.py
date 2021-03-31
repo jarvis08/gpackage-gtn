@@ -58,7 +58,6 @@ if __name__ == '__main__':
     node_features = torch.from_numpy(node_features).type(torch.FloatTensor)
     train_node = torch.from_numpy(np.array(labels[0])[:,0]).type(torch.LongTensor)
     train_target = torch.from_numpy(np.array(labels[0])[:,1]).type(torch.LongTensor)
-    print(train_target)
     valid_node = torch.from_numpy(np.array(labels[1])[:,0]).type(torch.LongTensor)
     valid_target = torch.from_numpy(np.array(labels[1])[:,1]).type(torch.LongTensor)
     test_node = torch.from_numpy(np.array(labels[2])[:,0]).type(torch.LongTensor)
@@ -98,13 +97,6 @@ if __name__ == '__main__':
             model.zero_grad()
             model.train()
             loss,y_train,Ws = model(A, node_features, train_node, train_target)
-
-            print(y_train)
-            print(loss.shape)
-            print(y_train.shape)
-            print(torch.argmax(y_train.detach(), dim=1).shape)
-            print(train_target.shape)
-            exit()
 
             train_f1 = torch.mean(f1_score(torch.argmax(y_train.detach(),dim=1), train_target, num_classes=num_classes)).cpu().numpy()
             print('Train - Loss: {}, Macro_F1: {}'.format(loss.detach().cpu().numpy(), train_f1))

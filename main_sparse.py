@@ -53,8 +53,9 @@ if __name__ == '__main__':
     with open('data/'+args.dataset+'/labels.pkl','rb') as f:
         labels = pickle.load(f)
         
-        
     num_nodes = edges[0].shape[0]
+    print(num_nodes)
+    print(node_features.shape)
     A = []
     
     for i,edge in enumerate(edges):

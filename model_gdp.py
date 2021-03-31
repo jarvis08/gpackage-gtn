@@ -8,8 +8,7 @@ import pdb
 
 
 class GTN(nn.Module):
-    
-    def __init__(self, num_edge, num_channels, w_in, w_out, num_class,num_layers,norm):
+    def __init__(self, num_edge, num_channels, w_in, w_out, num_class, num_layers, norm):
         super(GTN, self).__init__()
         self.num_edge = num_edge
         self.num_channels = num_channels
@@ -27,7 +26,7 @@ class GTN(nn.Module):
         self.layers = nn.ModuleList(layers)
         self.weight = nn.Parameter(torch.Tensor(w_in, w_out))
         self.bias = nn.Parameter(torch.Tensor(w_out))
-        self.loss = nn.BCEWithLogitsLoss()
+        self.loss = nn.BCEWithLogitsLoss(reduction='none')
         #self.linear1 = nn.Linear(self.w_out*self.num_channels, self.w_out)
         #self.linear2 = nn.Linear(self.w_out, self.num_class)
         self.linear1 = nn.Linear(self.w_out*self.num_channels, 1024)
@@ -100,10 +99,11 @@ class GTN(nn.Module):
         X_ = F.relu(X_)
         y = self.linear4(X_[target_x])
         loss = self.loss(y, target)
+        loss = torch.mean(torch.sum(loss, -1))
         return loss, y, Ws
 
+
 class GTLayer(nn.Module):
-    
     def __init__(self, in_channels, out_channels, first=True):
         super(GTLayer, self).__init__()
         self.in_channels = in_channels
@@ -127,8 +127,8 @@ class GTLayer(nn.Module):
             W = [(F.softmax(self.conv1.weight, dim=1)).detach()]
         return H,W
 
+
 class GTConv(nn.Module):
-    
     def __init__(self, in_channels, out_channels):
         super(GTConv, self).__init__()
         self.in_channels = in_channels

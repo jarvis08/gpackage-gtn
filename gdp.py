@@ -8,6 +8,8 @@ import pdb
 import pickle
 import argparse
 from utils import f1_score
+import logging
+from time import time
 
 
 def load_embedding_from_txt(file_name):
@@ -27,17 +29,6 @@ def load_embedding_from_txt(file_name):
 
 
 def micro_f1(logits, labels):
-    #predicted = tf.cast(predicted, dtype=tf.int32)
-    #labels = tf.cast(self.labels, dtype=tf.int32)
-
-    #true_pos = tf.math.count_nonzero(predicted * labels)
-    #false_pos = tf.math.count_nonzero(predicted * (labels - 1))
-    #false_neg = tf.math.count_nonzero((predicted - 1) * labels)
-
-    #precision = true_pos / (true_pos + false_pos)
-    #recall = true_pos / (true_pos + false_neg)
-    #fmeasure = (2 * precision * recall) / (precision + recall)
-
     predicted = logits.type(torch.IntTensor)
     labels = labels.type(torch.IntTensor)
 
@@ -53,9 +44,7 @@ def micro_f1(logits, labels):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default="GDP",
-                        help='Dataset')
-    parser.add_argument('--epoch', type=int, default=40,
+    parser.add_argument('--epoch', type=int, default=4000,
                         help='Training Epochs')
     parser.add_argument('--node_dim', type=int, default=64,
                         help='Node dimension')
@@ -65,7 +54,7 @@ if __name__ == '__main__':
                         help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=0.001,
                         help='l2 reg')
-    parser.add_argument('--num_layers', type=int, default=2,
+    parser.add_argument('--num_layers', type=int, default=1,
                         help='number of layer')
     parser.add_argument('--norm', type=str, default='true',
                         help='normalization')
@@ -73,9 +62,10 @@ if __name__ == '__main__':
                         help='adaptive learning rate')
     parser.add_argument('--cv', type=int, default=1,
                         help='Fold number of Cross Validation(10-fold)')
+    parser.add_argument('--mode', type=str, default='test',
+                        help='train or test')
 
     args = parser.parse_args()
-    print(args)
     epochs = args.epoch
     node_dim = args.node_dim
     num_channels = args.num_channels
@@ -85,36 +75,40 @@ if __name__ == '__main__':
     norm = args.norm
     adaptive_lr = args.adaptive_lr
     cv = args.cv
+    mode = args.mode
+
+    logging.basicConfig(filename=f"Model/FOLD-{cv}.log", level=logging.DEBUG)
+    logger = logging.getLogger()
 
     node_names, node_features = load_embedding_from_txt(f"./data/GDP/gdp/EmbeddingData/ORI_NS/total_embedding-{cv}.txt")
     node_features = np.asarray(node_features)
 
-    with open('data/' + args.dataset + f'/result/FOLD-{cv}/edges.pkl','rb') as f:
+    with open(f'./data/GDP/result_v2/FOLD-{cv}/edges.pkl','rb') as f:
         edges = pickle.load(f)
-    with open('data/' + args.dataset + f'/result/FOLD-{cv}/labels.pkl','rb') as f:
+    with open(f'./data/GDP/result_v2/FOLD-{cv}/labels.pkl','rb') as f:
         labels = pickle.load(f)
-    with open('data/' + args.dataset + f'/result/FOLD-{cv}/nodes.pkl','rb') as f:
+    with open(f'./data/GDP/result_v2/FOLD-{cv}/nodes.pkl','rb') as f:
         nodes = pickle.load(f)
     num_nodes = edges[0].shape[0]
-    for i,edge in enumerate(edges):
+
+    for i, edge in enumerate(edges):
         if i ==0:
             A = torch.from_numpy(edge.todense()).type(torch.FloatTensor).unsqueeze(-1)
         else:
-            A = torch.cat([A,torch.from_numpy(edge.todense()).type(torch.FloatTensor).unsqueeze(-1)], dim=-1)
-    A = torch.cat([A,torch.eye(num_nodes).type(torch.FloatTensor).unsqueeze(-1)], dim=-1)
+            A = torch.cat([A, torch.from_numpy(edge.todense()).type(torch.FloatTensor).unsqueeze(-1)], dim=-1)
+    A = torch.cat([A, torch.eye(num_nodes).type(torch.FloatTensor).unsqueeze(-1)], dim=-1)
     
     node_features = torch.from_numpy(node_features).type(torch.FloatTensor)
     train_node = torch.from_numpy(np.array(nodes[0])).type(torch.LongTensor)
     train_target = torch.from_numpy(np.array(labels[0])).type(torch.FloatTensor)
+
     valid_node = torch.from_numpy(np.array(nodes[1])).type(torch.LongTensor)
     valid_target = torch.from_numpy(np.array(labels[1])).type(torch.FloatTensor)
+
     test_node = torch.from_numpy(np.array(nodes[2])).type(torch.LongTensor)
     test_target = torch.from_numpy(np.array(labels[2])).type(torch.FloatTensor)
-    print(train_node.shape)
-    print(train_target.shape)
 
     num_classes = train_target.shape[1]
-    final_f1 = 0
     for l in range(1):
         model = GTN(num_edge=A.shape[-1],
                             num_channels=num_channels,
@@ -133,52 +127,103 @@ if __name__ == '__main__':
                                         ], lr=0.005, weight_decay=0.001)
         # Train & Valid & Test
         best_val_loss = 10000
-        best_test_loss = 10000
         best_train_loss = 10000
         best_train_f1 = 0
         best_val_f1 = 0
-        best_test_f1 = 0
-        
-        for i in range(epochs):
-            for param_group in optimizer.param_groups:
-                if param_group['lr'] > 0.005:
-                    param_group['lr'] = param_group['lr'] * 0.9
-            print('Epoch:  ',i+1)
-            model.zero_grad()
-            model.train()
-            loss, y_train, Ws = model(A, node_features, train_node, train_target)
+        min_checkpoint = 2000
+        patience = 200
+        #min_checkpoint = 0
+        #patience = 0
+        fury = 0
+        if mode == 'train':
+            log = f">>> FOLD-{cv} Model Training"
+            logger.debug(log)
+            logger.debug(args)
+            start_time = time()
+            for i in range(epochs):
+                for param_group in optimizer.param_groups:
+                    if param_group['lr'] > 0.005:
+                        param_group['lr'] = param_group['lr'] * 0.9
+                print('Epoch:  ', i + 1)
+                model.zero_grad()
+                model.train()
+                loss, y_train, Ws = model(A, node_features, train_node, train_target)
+                train_f1 = micro_f1(torch.round(torch.sigmoid(y_train.detach())), train_target)
+                print('Train - Loss: {}, F1-score: {:.4f}'.format(loss.detach().cpu().numpy(), train_f1))
+                loss.backward()
+                optimizer.step()
+                model.eval()
+                with torch.no_grad():
+                    val_loss, y_valid, _ = model.forward(A, node_features, valid_node, valid_target)
+                    val_f1 = micro_f1(torch.round(torch.sigmoid(y_valid)), valid_target)
+                    print('Valid - Loss: {}, F1-score: {:.4f}'.format(val_loss.detach().cpu().numpy(), val_f1))
+                if i >= min_checkpoint:
+                    if val_f1 > best_val_f1:
+                        best_train_f1 = train_f1
+                        best_val_f1 = val_f1
+                        best_val_loss = val_loss.detach().cpu().numpy()
+                        fury = 0
 
-            train_f1 = micro_f1(torch.round(y_train.detach()), train_target)
-            #train_f1 = torch.mean(f1_score(torch.round(y_train.detach()), train_target, num_classes=2)).cpu().numpy()
-            #train_f1 = torch.mean(f1_score(torch.round(y_train.detach()), train_target, num_classes=num_classes)).cpu().numpy()
-            #train_f1 = torch.mean(f1_score(torch.argmax(y_train.detach(),dim=1), train_target, num_classes=num_classes)).cpu().numpy()
-            print('Train - Loss: {}, Macro_F1: {}'.format(loss.detach().cpu().numpy(), train_f1))
-            loss.backward()
-            optimizer.step()
-            model.eval()
-            # Valid
-            with torch.no_grad():
-                val_loss, y_valid, _ = model.forward(A, node_features, valid_node, valid_target)
-                val_f1 = micro_f1(torch.round(y_valid), valid_target)
-                #val_f1 = torch.mean(f1_score(torch.round(y_valid), valid_target, num_classes=2)).cpu().numpy()
-                #val_f1 = torch.mean(f1_score(torch.round(y_valid), valid_target, num_classes=num_classes)).cpu().numpy()
-                #val_f1 = torch.mean(f1_score(torch.argmax(y_valid,dim=1), valid_target, num_classes=num_classes)).cpu().numpy()
-                print('Valid - Loss: {}, Macro_F1: {}'.format(val_loss.detach().cpu().numpy(), val_f1))
-                test_loss, y_test, W = model.forward(A, node_features, test_node, test_target)
-                test_f1 = micro_f1(torch.round(y_test), test_target)
-                #test_f1 = torch.mean(f1_score(torch.round(y_test), test_target, num_classes=2)).cpu().numpy()
-                #test_f1 = torch.mean(f1_score(torch.round(y_test), test_target, num_classes=num_classes)).cpu().numpy()
-                #test_f1 = torch.mean(f1_score(torch.argmax(y_test,dim=1), test_target, num_classes=num_classes)).cpu().numpy()
-                print('Test - Loss: {}, Macro_F1: {}\n'.format(test_loss.detach().cpu().numpy(), test_f1))
-            if val_f1 > best_val_f1:
-                best_val_loss = val_loss.detach().cpu().numpy()
-                best_test_loss = test_loss.detach().cpu().numpy()
-                best_train_loss = loss.detach().cpu().numpy()
-                best_train_f1 = train_f1
-                best_val_f1 = val_f1
-                best_test_f1 = test_f1 
-        print('---------------Best Results--------------------')
-        print('Train - Loss: {}, Macro_F1: {}'.format(best_train_loss, best_train_f1))
-        print('Valid - Loss: {}, Macro_F1: {}'.format(best_val_loss, best_val_f1))
-        print('Test - Loss: {}, Macro_F1: {}'.format(best_test_loss, best_test_f1))
-        final_f1 += best_test_f1
+                        t = time() - start_time
+                        if t > 3600:
+                            t /= 3600
+                            t = '{:.1f} hour'.format(t)
+                        elif t > 60:
+                            t /= 60
+                            t = '{:.1f} min'.format(t)
+                        else:
+                            t = '{:.1f} sec'.format(t)
+                        log = f'[Step: {i + 1}] Best Valid - F1-score: {best_val_f1:.4f}, Loss: {best_val_loss:.4f}, Time: ' + t
+                        logger.debug(log)
+                        print(log)
+
+                        f_path = f'./Model/Model_FOLD-{cv}.pt'
+                        logger.debug('Save model to ' + f_path)
+                        torch.save(model, f_path)
+
+                        #f_path = './Model/Model_state_dict_test.pt'
+                        #logger.debug('Save to ' + f_path)
+                        #torch.save(model.state_dict(), f_path)
+
+                        #f_path = './Model/state_dict_and_optimizer.pt'
+                        #logger.debug('Save to ' + f_path)
+                        #torch.save({
+                        #    'model': model.state_dict(),
+                        #    'optimizer': optimizer.state_dict()
+                        #    }, f_path)
+                    else:
+                        fury += 1
+                    if fury >= patience:
+                        break
+                else:
+                    if val_f1 > best_val_f1:
+                        best_train_f1 = train_f1
+                        best_val_f1 = val_f1
+                        best_val_loss = val_loss.detach().cpu().numpy()
+
+                        t = time() - start_time
+                        if t > 3600:
+                            t /= 3600
+                            t = '{:.1f} hour'.format(t)
+                        elif t > 60:
+                            t /= 60
+                            t = '{:.1f} min'.format(t)
+                        else:
+                            t = '{:.1f} sec'.format(t)
+                        log = f'[Step: {i + 1}] Best Valid - F1-score: {best_val_f1:.4f}, Loss: {best_val_loss:.4f}, Time: ' + t
+                        logger.debug(log)
+                        print(log)
+            print('---------------Best Results--------------------')
+            print('Train - F1-score: {:.4f}'.format(best_train_f1))
+            print('Valid - F1-score: {:.4f}'.format(best_val_f1))
+            log = f"Final Validation F1-score: {best_val_f1:.4f}"
+            logger.debug(log)
+        else:
+            print(f">>> FOLD-{cv} Model Test")
+            #f_path = 'Model/Model_state_dict_test.pt'
+            #model.load_state_dict(troch.load(f_path), strict=False)
+            f_path = f'Model/Model_FOLD-{cv}.pt'
+            model = torch.load(f_path)
+            _, y_test, _ = model.forward(A, node_features, test_node, test_target)
+            test_f1 = micro_f1(torch.round(torch.sigmoid(y_test)), test_target)
+            print('Test - F1-score: {:.4f}'.format(test_f1))

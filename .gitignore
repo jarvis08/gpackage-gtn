@@ -6,3 +6,4 @@ data/GDP/gdp
 data/GDP/result
 .vscode/*
 __pycache__
+Model/*
